@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -22,6 +23,70 @@ def load_profile(path: str) -> dict:
         raise FileNotFoundError(f"Resume file not found: {resume}")
 
     return data
+
+
+def normalize_text(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def profile_value_for_label(profile: dict, label_text: str):
+    normalized = normalize_text(label_text)
+
+    direct_map = {
+        "name": "full_name",
+        "full name": "full_name",
+        "legal name": "full_name",
+        "first name": "preferred_first_name",
+        "last name": "preferred_last_name",
+        "email": "email",
+        "phone": "phone",
+        "linkedin": "linkedin",
+        "github": "github",
+        "website": "website",
+        "portfolio": "portfolio",
+        "location": "location",
+        "city": "city",
+        "state": "state",
+        "current company": "current_company",
+        "current title": "current_title",
+        "school": "school",
+        "university": "school",
+        "degree": "degree",
+    }
+
+    for key_text, profile_key in direct_map.items():
+        if key_text in normalized and profile.get(profile_key):
+            return profile.get(profile_key)
+
+    if "authorized" in normalized and "work" in normalized:
+        return profile.get("work_authorization")
+
+    if "sponsor" in normalized or "sponsorship" in normalized:
+        return profile.get("need_sponsorship")
+
+    custom_fields = profile.get("custom_fields") or {}
+    for key, value in custom_fields.items():
+        if normalize_text(key) == normalized:
+            return value
+
+    return None
+
+
+def input_label(locator) -> str:
+    pieces = [
+        locator.get_attribute("aria-label"),
+        locator.get_attribute("placeholder"),
+        locator.get_attribute("name"),
+    ]
+
+    input_id = locator.get_attribute("id")
+    if input_id:
+        page = locator.page
+        label = page.locator(f'label[for="{input_id}"]').first
+        if label.count() > 0:
+            pieces.append(label.inner_text())
+
+    return " ".join([p for p in pieces if p]).strip()
 
 
 def get_preferred_name_parts(profile: dict) -> tuple[str | None, str | None]:
@@ -94,6 +159,83 @@ def check_yes_no_by_text(page, question_text, answer_yes=True):
     except Exception:
         pass
     return False
+
+
+def fill_detected_fields(page, profile):
+    filled = 0
+    controls = page.locator("input, textarea, select")
+    control_count = controls.count()
+
+    for i in range(control_count):
+        control = controls.nth(i)
+
+        try:
+            if not control.is_visible():
+                continue
+        except Exception:
+            continue
+
+        tag = (control.evaluate("el => el.tagName") or "").lower()
+        input_type = (control.get_attribute("type") or "text").lower()
+
+        if input_type in {"hidden", "submit", "button", "file"}:
+            continue
+
+        label_text = input_label(control)
+        value = profile_value_for_label(profile, label_text)
+        if value in [None, ""]:
+            continue
+
+        if tag in {"input", "textarea"} and input_type not in {"checkbox", "radio"}:
+            control.fill(str(value))
+            print(f"Filled '{label_text}' with '{value}'")
+            filled += 1
+            continue
+
+        if tag == "select":
+            selected = False
+            try:
+                control.select_option(label=str(value))
+                selected = True
+            except Exception:
+                pass
+
+            if not selected:
+                try:
+                    control.select_option(value=str(value))
+                    selected = True
+                except Exception:
+                    pass
+
+            if selected:
+                print(f"Selected '{value}' for '{label_text}'")
+                filled += 1
+
+        if input_type == "checkbox":
+            answer = str(value).strip().lower() in {"yes", "true", "1"}
+            if answer:
+                control.check()
+            else:
+                control.uncheck()
+            print(f"Set checkbox '{label_text}' to {answer}")
+            filled += 1
+
+    radio_groups = page.locator('fieldset, div[role="radiogroup"]')
+    for i in range(radio_groups.count()):
+        group = radio_groups.nth(i)
+        text = group.inner_text()
+        value = profile_value_for_label(profile, text)
+        if value in [None, ""]:
+            continue
+
+        choice = "Yes" if str(value).strip().lower() in {"yes", "true", "1"} else "No"
+        option = group.locator(f'label:has-text("{choice}"), span:has-text("{choice}")').first
+        if option.count() > 0:
+            option.click()
+            print(f"Answered radio '{text[:50]}...' with '{choice}'")
+            filled += 1
+
+    print(f"Auto-detected and filled {filled} field(s).")
 
 
 def main():
@@ -221,6 +363,8 @@ def main():
             "Will you now or in the future require sponsorship",
             answer_yes=(profile.get("need_sponsorship", "").lower() == "yes")
         )
+
+        fill_detected_fields(page, profile)
 
         # Let autocomplete/render finish
         page.wait_for_timeout(1500)
