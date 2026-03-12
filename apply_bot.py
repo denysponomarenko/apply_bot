@@ -184,10 +184,36 @@ def check_option_for_question(page, question_text, option_text):
             except Exception:
                 continue
 
-        # Fallback for custom checkbox/radio wrappers where visible text is nested.
-        controls = container.locator('input[type="checkbox"], input[type="radio"], option')
+        # Explicit input matching for controls where the text is associated via aria
+        # attributes instead of a clickable label wrapper.
+        controls = container.locator('input[type="checkbox"], input[type="radio"]')
         for i in range(controls.count()):
             control = controls.nth(i)
+
+            try:
+                descriptor_parts = [
+                    control.get_attribute("aria-label") or "",
+                    control.get_attribute("value") or "",
+                ]
+
+                control_id = control.get_attribute("id")
+                if control_id:
+                    label = container.locator(f'label[for="{control_id}"]').first
+                    if label.count() > 0:
+                        descriptor_parts.append(label.inner_text())
+
+                normalized_descriptor = normalize_text(" ".join(descriptor_parts))
+                if normalized_option and normalized_option in normalized_descriptor:
+                    control.check()
+                    print(f"Checked '{option_text}' for '{question_text}'")
+                    return True
+            except Exception:
+                continue
+
+        # Fallback for custom checkbox/radio wrappers where visible text is nested.
+        controls_or_options = container.locator('input[type="checkbox"], input[type="radio"], option')
+        for i in range(controls_or_options.count()):
+            control = controls_or_options.nth(i)
             descriptor = " ".join(
                 [
                     control.get_attribute("aria-label") or "",
@@ -217,9 +243,11 @@ def check_option_for_question(page, question_text, option_text):
         # Prefer an exact text hit when possible.
         block = page.locator(f"text={question_text}").first
         if block.count() > 0:
-            container = block.locator("xpath=ancestor::*[self::div or self::fieldset][1]")
-            if click_from_container(container):
-                return True
+            # The nearest ancestor does not always include answers; walk up a few levels.
+            for level in range(1, 5):
+                container = block.locator(f"xpath=ancestor::*[self::div or self::fieldset][{level}]")
+                if container.count() > 0 and click_from_container(container):
+                    return True
 
         # Fallback to fuzzy matching for minor text differences like punctuation/casing.
         candidates = page.locator("fieldset, div")
