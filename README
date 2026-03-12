@@ -1,0 +1,13 @@
+## Ashby autofill helper
+
+This repo now includes `autofill_ashby.py`, a Playwright script that automatically fills the Whatnot application form using `profile.json`.
+
+### Run
+
+```bash
+python3 -m pip install playwright
+python3 -m playwright install chromium
+python3 autofill_ashby.py
+```
+
+The script fills all supported fields automatically, pauses for manual review, and leaves final submission to you (including CAPTCHA).
