@@ -161,6 +161,31 @@ def check_yes_no_by_text(page, question_text, answer_yes=True):
     return False
 
 
+def check_option_for_question(page, question_text, option_text):
+    """
+    Finds a question block containing question_text, then selects the option_text.
+    Useful for checkbox/radio groups with custom labels.
+    """
+    try:
+        block = page.locator(f"text={question_text}").first
+        if block.count() == 0:
+            return False
+
+        container = block.locator("xpath=ancestor::*[self::div or self::fieldset][1]")
+        option = container.locator(
+            f'label:has-text("{option_text}"), span:has-text("{option_text}"), text={option_text}'
+        ).first
+
+        if option.count() > 0 and option.is_visible():
+            option.click()
+            print(f"Answered '{question_text}' with '{option_text}'")
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def fill_detected_fields(page, profile):
     filled = 0
     controls = page.locator("input, textarea, select")
@@ -362,6 +387,12 @@ def main():
             page,
             "Will you now or in the future require sponsorship",
             answer_yes=(profile.get("need_sponsorship", "").lower() == "yes")
+        )
+
+        check_option_for_question(
+            page,
+            "How did you hear about this opportunity? (Select all that apply)",
+            "LinkedIn"
         )
 
         fill_detected_fields(page, profile)
