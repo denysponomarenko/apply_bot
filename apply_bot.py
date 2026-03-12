@@ -166,20 +166,70 @@ def check_option_for_question(page, question_text, option_text):
     Finds a question block containing question_text, then selects the option_text.
     Useful for checkbox/radio groups with custom labels.
     """
-    try:
-        block = page.locator(f"text={question_text}").first
-        if block.count() == 0:
-            return False
+    normalized_question = normalize_text(question_text)
+    normalized_option = normalize_text(option_text)
 
-        container = block.locator("xpath=ancestor::*[self::div or self::fieldset][1]")
-        option = container.locator(
+    def click_from_container(container):
+        option_candidates = container.locator(
             f'label:has-text("{option_text}"), span:has-text("{option_text}"), text={option_text}'
-        ).first
+        )
 
-        if option.count() > 0 and option.is_visible():
-            option.click()
-            print(f"Answered '{question_text}' with '{option_text}'")
-            return True
+        for i in range(option_candidates.count()):
+            option = option_candidates.nth(i)
+            try:
+                if option.is_visible():
+                    option.click()
+                    print(f"Answered '{question_text}' with '{option_text}'")
+                    return True
+            except Exception:
+                continue
+
+        # Fallback for custom checkbox/radio wrappers where visible text is nested.
+        controls = container.locator('input[type="checkbox"], input[type="radio"], option')
+        for i in range(controls.count()):
+            control = controls.nth(i)
+            descriptor = " ".join(
+                [
+                    control.get_attribute("aria-label") or "",
+                    control.get_attribute("value") or "",
+                    control.inner_text() if control.evaluate("el => el.tagName.toLowerCase()") == "option" else "",
+                ]
+            )
+            if normalized_option and normalized_option in normalize_text(descriptor):
+                tag = (control.evaluate("el => el.tagName") or "").lower()
+                try:
+                    if tag == "option":
+                        select_id = control.evaluate("el => el.parentElement && el.parentElement.id")
+                        if select_id:
+                            container.locator(f"select#{select_id}").select_option(value=control.get_attribute("value"))
+                            print(f"Selected '{option_text}' for '{question_text}'")
+                            return True
+                    else:
+                        control.check()
+                        print(f"Checked '{option_text}' for '{question_text}'")
+                        return True
+                except Exception:
+                    continue
+
+        return False
+
+    try:
+        # Prefer an exact text hit when possible.
+        block = page.locator(f"text={question_text}").first
+        if block.count() > 0:
+            container = block.locator("xpath=ancestor::*[self::div or self::fieldset][1]")
+            if click_from_container(container):
+                return True
+
+        # Fallback to fuzzy matching for minor text differences like punctuation/casing.
+        candidates = page.locator("fieldset, div")
+        for i in range(candidates.count()):
+            candidate = candidates.nth(i)
+            text = normalize_text(candidate.inner_text())
+            if not text or normalized_question not in text:
+                continue
+            if click_from_container(candidate):
+                return True
     except Exception:
         pass
 
@@ -235,6 +285,7 @@ def fill_detected_fields(page, profile):
             if selected:
                 print(f"Selected '{value}' for '{label_text}'")
                 filled += 1
+            continue
 
         if input_type == "checkbox":
             answer = str(value).strip().lower() in {"yes", "true", "1"}
