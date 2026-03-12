@@ -169,20 +169,56 @@ def check_option_for_question(page, question_text, option_text):
     normalized_question = normalize_text(question_text)
     normalized_option = normalize_text(option_text)
 
-    def click_from_container(container):
-        option_candidates = container.locator(
-            f'label:has-text("{option_text}"), span:has-text("{option_text}"), text={option_text}'
-        )
+    def descriptor_for_control(control, container):
+        descriptor_parts = [
+            control.get_attribute("aria-label") or "",
+            control.get_attribute("value") or "",
+        ]
 
-        for i in range(option_candidates.count()):
-            option = option_candidates.nth(i)
-            try:
-                if option.is_visible():
-                    option.click()
-                    print(f"Answered '{question_text}' with '{option_text}'")
-                    return True
-            except Exception:
-                continue
+        control_id = control.get_attribute("id")
+        if control_id:
+            label = container.locator(f'label[for="{control_id}"]').first
+            if label.count() > 0:
+                descriptor_parts.append(label.inner_text())
+
+        wrapper_label = control.locator("xpath=ancestor::label[1]").first
+        if wrapper_label.count() > 0:
+            descriptor_parts.append(wrapper_label.inner_text())
+
+        return normalize_text(" ".join(descriptor_parts))
+
+    def click_from_container(container):
+        # Most reliable: get checkbox/radio by accessible name inside this question.
+        exact_controls = container.get_by_role(
+            "checkbox", name=re.compile(rf"^{re.escape(option_text)}$", re.IGNORECASE)
+        )
+        if exact_controls.count() > 0:
+            control = exact_controls.first
+            if control.is_visible():
+                control.check()
+                print(f"Checked '{option_text}' for '{question_text}'")
+                return True
+
+        partial_controls = container.get_by_role(
+            "checkbox", name=re.compile(re.escape(option_text), re.IGNORECASE)
+        )
+        if partial_controls.count() > 0:
+            control = partial_controls.first
+            if control.is_visible():
+                control.check()
+                print(f"Checked '{option_text}' for '{question_text}'")
+                return True
+
+        # Next best: radio groups by accessible name.
+        exact_radios = container.get_by_role(
+            "radio", name=re.compile(rf"^{re.escape(option_text)}$", re.IGNORECASE)
+        )
+        if exact_radios.count() > 0:
+            control = exact_radios.first
+            if control.is_visible():
+                control.check()
+                print(f"Selected '{option_text}' for '{question_text}'")
+                return True
 
         # Explicit input matching for controls where the text is associated via aria
         # attributes instead of a clickable label wrapper.
@@ -191,22 +227,31 @@ def check_option_for_question(page, question_text, option_text):
             control = controls.nth(i)
 
             try:
-                descriptor_parts = [
-                    control.get_attribute("aria-label") or "",
-                    control.get_attribute("value") or "",
-                ]
-
-                control_id = control.get_attribute("id")
-                if control_id:
-                    label = container.locator(f'label[for="{control_id}"]').first
-                    if label.count() > 0:
-                        descriptor_parts.append(label.inner_text())
-
-                normalized_descriptor = normalize_text(" ".join(descriptor_parts))
+                normalized_descriptor = descriptor_for_control(control, container)
                 if normalized_option and normalized_option in normalized_descriptor:
                     control.check()
                     print(f"Checked '{option_text}' for '{question_text}'")
                     return True
+            except Exception:
+                continue
+
+        option_candidates = container.locator(
+            f'label:has-text("{option_text}"), span:has-text("{option_text}")'
+        )
+
+        for i in range(option_candidates.count()):
+            option = option_candidates.nth(i)
+            try:
+                if not option.is_visible():
+                    continue
+
+                normalized_candidate = normalize_text(option.inner_text())
+                if normalized_option and normalized_option not in normalized_candidate:
+                    continue
+
+                option.click()
+                print(f"Answered '{question_text}' with '{option_text}'")
+                return True
             except Exception:
                 continue
 
