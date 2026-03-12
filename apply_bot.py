@@ -24,6 +24,24 @@ def load_profile(path: str) -> dict:
     return data
 
 
+def get_preferred_name_parts(profile: dict) -> tuple[str | None, str | None]:
+    first_name = profile.get("preferred_first_name")
+    last_name = profile.get("preferred_last_name")
+
+    if first_name and last_name:
+        return first_name, last_name
+
+    full_name = (profile.get("full_name") or "").strip()
+    if not full_name:
+        return first_name, last_name
+
+    parts = full_name.split()
+    inferred_first = parts[0] if parts else None
+    inferred_last = " ".join(parts[1:]) if len(parts) > 1 else None
+
+    return first_name or inferred_first, last_name or inferred_last
+
+
 def fill_first(page, selectors, value, label=None):
     if not value:
         return False
@@ -80,6 +98,7 @@ def check_yes_no_by_text(page, question_text, answer_yes=True):
 
 def main():
     profile = load_profile(PROFILE_PATH)
+    preferred_first_name, preferred_last_name = get_preferred_name_parts(profile)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, slow_mo=150)
@@ -96,10 +115,35 @@ def main():
         fill_first(
             page,
             [
+                'input[name*="first"]',
+                'input[aria-label*="First Name"]',
+                'input[placeholder*="First Name"]',
                 'input[name="name"]',
                 'input[aria-label*="Full Legal Name"]',
                 'input[placeholder*="Full Legal Name"]',
                 'input[type="text"]'
+            ],
+            preferred_first_name,
+            "preferred_first_name"
+        )
+
+        fill_first(
+            page,
+            [
+                'input[name*="last"]',
+                'input[aria-label*="Last Name"]',
+                'input[placeholder*="Last Name"]'
+            ],
+            preferred_last_name,
+            "preferred_last_name"
+        )
+
+        fill_first(
+            page,
+            [
+                'input[name="name"]',
+                'input[aria-label*="Full Legal Name"]',
+                'input[placeholder*="Full Legal Name"]'
             ],
             profile.get("full_name"),
             "full_name"
